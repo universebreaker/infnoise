@@ -16,10 +16,11 @@
 #include <ftdi.h>
 #include "libinfnoise_private.h"
 #include "libinfnoise.h"
-#include "KeccakF-1600-interface.h"
+#include "blake2.h"
+#include "blake2-impl.h"
 
-uint8_t keccakState[KeccakPermutationSizeInBytes];
-bool initInfnoise(struct ftdi_context *ftdic,char *serial, char **message, bool keccak, bool debug) {
+blake2xb_state b2xb[1];
+bool initInfnoise(struct ftdi_context *ftdic,char *serial, char **message, bool hash, bool debug, uint32_t outlen) {
     prepareOutputBuffer();
 
     // initialize health check
@@ -36,10 +37,15 @@ bool initInfnoise(struct ftdi_context *ftdic,char *serial, char **message, bool 
         }
     }
 
-    // initialize keccak
-    if (keccak) {
-        KeccakInitialize();
-        KeccakInitializeState(keccakState);
+    // initialize blake2, as stated by blake2x document, XOF digest length can be up to 2^32-2 (0xFFFFFFFEUL) for
+    // predefined output length (max. 4GiB output), set that to 2^32 - 1 if "output length not known in advance"
+    // or "require > 4GiB output (max. 256GiB)"
+    if (hash) {
+        if (outlen == 0 || outlen > 0xFFFFFFFEUL) {
+            blake2xb_init(b2xb, 0xFFFFFFFFUL);
+        } else {
+            blake2xb_init(b2xb, outlen);
+        }
     }
 
     // let healthcheck collect some data
@@ -123,14 +129,14 @@ bool isSuperUser(void) {
         return (geteuid() == 0);
 }
 
-// Whiten the output, if requested, with a Keccak sponge. Output bytes only if the health
-// checker says it's OK.  Using outputMultiplier > 1 is a nice way to generate a lot more
+// Whiten the output, if requested, with a blake2xb state. Output bytes only if
+// the health checker says it's OK.  Use outputLength to generate a lot more
 // cryptographically secure pseudo-random data than the INM generates.  If
 // outputMultiplier is 0, we output only as many bits as we measure in entropy.
 // This allows a user to generate hundreds of MiB per second if needed, for use
 // as cryptographic keys.
 uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t entropy,
-        bool raw, bool writeDevRandom, uint32_t outputMultiplier, bool noOutput,
+        bool raw, bool writeDevRandom, uint32_t outputLength, bool noOutput,
         char **message, bool *errorFlag) {
     //Use the lower of the measured entropy and the provable lower bound on
     //average entropy.
@@ -152,18 +158,12 @@ uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t entropy,
         return BUFLEN/8u;
     }
 
-    // Note that BUFLEN has to be less than 1600 by enough to make the sponge secure,
-    // since outputting all 1600 bits would tell an attacker the Keccak state, allowing
-    // him to predict any further output, when outputMultiplier > 1, until the next call
-    // to processBytes.  All 512 bits are absorbed before squeezing data out to ensure that
-    // we instantly recover (reseed) from a state compromise, which is when an attacker
-    // gets a snapshot of the keccak state.  BUFLEN must be a multiple of 64, since
-    // Keccak-1600 uses 64-bit "lanes".
-    KeccakAbsorb(keccakState, bytes, BUFLEN/64u);
+    // reseed before reaching max. output
+    blake2xb_update(b2xb, bytes, BUFLEN/8u);
     uint8_t dataOut[16u*8u];
-    if(outputMultiplier == 0u) {
+    if(outputLength == 0u) {
         // Output all the bytes of entropy we have
-        KeccakExtract(keccakState, dataOut, (entropy + 63u)/64u);
+        blake2xb_final(b2xb, dataOut, entropy/8u);
 	if (!noOutput) {
 	    if (!outputBytes(dataOut, entropy/8u, entropy & 0x7u, writeDevRandom, message)) {
                 *errorFlag = true;
@@ -177,48 +177,97 @@ uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t entropy,
         return entropy/8u;
     }
 
-    // Output 256*outputMultipler bits.
-    uint32_t numBits = outputMultiplier*256u;
+    // Output [outputLength] bytes.
     uint32_t bytesWritten = 0u;
-
-    while(numBits > 0u) {
-        // Write up to 1024 bits at a time.
-        uint32_t bytesToWrite = 1024u/8u;
-        if(bytesToWrite > numBits/8u) {
-            bytesToWrite = numBits/8u;
-        }
-        KeccakExtract(keccakState, dataOut, bytesToWrite/8u);
-        uint32_t entropyThisTime = entropy;
-        if(entropyThisTime > 8u*bytesToWrite) {
-            entropyThisTime = 8u*bytesToWrite;
-        }
-	if (!noOutput) {
-            if (!outputBytes(dataOut, bytesToWrite, entropyThisTime, writeDevRandom, message)) {
-                *errorFlag = true;
-                return 0;
-            }
-	} else {
-            //memcpy(result + bytesWritten, dataOut, bytesToWrite * sizeof(uint8_t)); //doesn't work?
-            // alternative: loop through dataOut and append array elements to result..
-	    if (result != NULL) {
-                for (uint32_t i =0; i < bytesToWrite; i++ ) {
-                    result[bytesWritten + i] = dataOut[i];
-                }
-            }
-	}
-        bytesWritten += bytesToWrite;
-        numBits -= bytesToWrite*8u;
-        entropy -= entropyThisTime;
-        if(numBits > 0u) {
-            KeccakPermutation(keccakState);
-        }
+    blake2xb_inm_final(b2xb, result, dataOut, outputLength, entropy, writeDevRandom, &bytesWritten, noOutput, message, errorFlag);
+    if (*errorFlag == true) {
+        return 0;
     }
-    if(bytesWritten != outputMultiplier*(256u/8u)) {
+
+    if(bytesWritten != outputLength) {
         *message = "Internal error outputing bytes";
 	*errorFlag = true;
         return 0;
     }
     return bytesWritten;
+}
+
+//customized final function to get partial output without changing blake2's underlying maths
+int blake2xb_inm_final( blake2xb_state *S, uint8_t *result, void *out, size_t outlen, uint32_t entropy,
+    bool writeDevRandom, uint32_t *bytesWritten, bool noOutput, char **message, bool *errorFlag) {
+  //add out variables
+
+  blake2b_state C[1];
+  blake2b_param P[1];
+  uint32_t xof_length = load32(&S->P->xof_length);
+  uint8_t root[BLAKE2B_BLOCKBYTES];
+  size_t i;
+  if (NULL == out) {
+    return -1;
+  }
+  /* outlen must match the output size defined in xof_length, */
+  /* unless it was -1, in which case anything goes except 0. */
+  if(xof_length == 0xFFFFFFFFUL) {
+    if(outlen == 0) {
+      return -1;
+    }
+  } else {
+    if(outlen != xof_length) {
+      return -1;
+    }
+  }
+  /* Finalize the root hash */
+  if (blake2b_final(S->S, root, BLAKE2B_OUTBYTES) < 0) {
+    return -1;
+  }
+  /* Set common block structure values */
+  /* Copy values from parent instance, and only change the ones below */
+  memcpy(P, S->P, sizeof(blake2b_param));
+  P->key_length = 0;
+  P->fanout = 0;
+  P->depth = 0;
+  store32(&P->leaf_length, BLAKE2B_OUTBYTES);
+  P->inner_length = BLAKE2B_OUTBYTES;
+  P->node_depth = 0;
+  for (i = 0; outlen > 0; ++i) {
+    const size_t block_size = (outlen < BLAKE2B_OUTBYTES) ? outlen : BLAKE2B_OUTBYTES;
+    /* Initialize state */
+    P->digest_length = block_size;
+    store32(&P->node_offset, i);
+    blake2b_init_param(C, P);
+    /* Process key if needed */
+    blake2b_update(C, root, BLAKE2B_OUTBYTES);
+    // here starts the modification, use a small buffer to receive partial result
+    // and output it as normal (as used in keccak version)
+    if (blake2b_final(C, (uint8_t *)out, block_size) < 0 ) {
+        return -1;
+    }
+    uint32_t entropyThisTime = entropy;
+    if (entropyThisTime > 8u*block_size) {
+        entropyThisTime = 8u*block_size
+    }
+    if (!noOutput) {
+        if (!outputBytes(dataOut, block_size, entropyThisTime, writeDevRandom, message)) {
+            *errorFlag = true;
+            return 0;
+        }
+    } else {
+        if (result != NULL) {
+            for (uint32_t j = 0; j < block_size; j++) {
+                result[*bytesWritten + j] = dataOut[j];
+            }
+        }
+    }
+    *bytesWritten += block_size
+    entropy -= entropyThisTime
+    //modification ends
+    outlen -= block_size;
+  }
+  secure_zero_memory(root, sizeof(root));
+  secure_zero_memory(P, sizeof(P));
+  secure_zero_memory(C, sizeof(C));
+  /* Put blake2xb in an invalid state? cf. blake2s_is_lastblock */
+  return 0;
 }
 
 // Return a list of all infinite noise multipliers found.
@@ -340,12 +389,12 @@ uint32_t readRawData(struct ftdi_context *ftdic, uint8_t *result, char **message
     return readData_private(ftdic, result, message, errorFlag, false, true, 0, false);
 }
 
-uint32_t readData(struct ftdi_context *ftdic, uint8_t *result, char **message, bool *errorFlag, uint32_t outputMultiplier) {
-    return readData_private(ftdic, result, message, errorFlag, false, false, outputMultiplier, false);
+uint32_t readData(struct ftdi_context *ftdic, uint8_t *result, char **message, bool *errorFlag, uint32_t outputLength) {
+    return readData_private(ftdic, result, message, errorFlag, false, false, outputLength, false);
 }
 
 uint32_t readData_private(struct ftdi_context *ftdic, uint8_t *result, char **message, bool *errorFlag,
-                        bool noOutput, bool raw, uint32_t outputMultiplier, bool devRandom) {
+                        bool noOutput, bool raw, uint32_t outputLength, bool devRandom) {
     uint8_t inBuf[BUFLEN];
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
@@ -371,7 +420,7 @@ uint32_t readData_private(struct ftdi_context *ftdic, uint8_t *result, char **me
 
 	// call health check and process bytes if OK
         if (inmHealthCheckOkToUseData() && inmEntropyOnTarget(entropy, BUFLEN)) {
-            uint32_t byteswritten = processBytes(bytes, result, entropy, raw, devRandom, outputMultiplier, noOutput, message, errorFlag);
+            uint32_t byteswritten = processBytes(bytes, result, entropy, raw, devRandom, outputLength, noOutput, message, errorFlag);
 	    return byteswritten;
         }
     }

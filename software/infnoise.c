@@ -15,10 +15,10 @@
 #include "infnoise.h"
 #include "libinfnoise.h"
 #include "libinfnoise_private.h"
-#include "KeccakF-1600-interface.h"
+#include "blake2.h"
 
 static void initOpts(struct opt_struct *opts) {
-	opts->outputMultiplier = 0u;
+	opts->outputLength = 0u;
 	opts->daemon = false;
 	opts->debug = false;
 	opts->devRandom = false;
@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     struct ftdi_context ftdic;
     struct opt_struct opts;
     int xArg;
-    bool multiplierAssigned = false;
+    bool lengthAssigned = false;
 
     initOpts(&opts);
 
@@ -51,15 +51,15 @@ int main(int argc, char **argv)
             opts.devRandom = true;
         } else if(!strcmp(argv[xArg], "--no-output")) {
             opts.noOutput = true;
-        } else if(!strcmp(argv[xArg], "--multiplier") && xArg+1 < argc) {
+        } else if(!strcmp(argv[xArg], "--length") && xArg+1 < argc) {
             xArg++;
-            multiplierAssigned = true;
-            int tmpOutputMult = atoi(argv[xArg]);
-            if(tmpOutputMult < 0) {
-                fputs("Multiplier must be >= 0\n", stderr);
+            lengthAssigned = true;
+            int tmpOutputLength = atoi(argv[xArg]);
+            if(tmpOutputLength < 0) {
+                fputs("Length must be >= 0\n", stderr);
                 return 1;
             }
-            opts.outputMultiplier = tmpOutputMult;
+            opts.outputLength = tmpOutputLength;
         } else if(!strcmp(argv[xArg], "--pidfile")) {
             xArg++;
             opts.pidFileName = argv[xArg];
@@ -94,8 +94,8 @@ int main(int argc, char **argv)
                             "    --debug - turn on some debug output\n"
                             "    --dev-random - write entropy to /dev/random instead of stdout\n"
                             "    --raw - do not whiten the output\n"
-                            "    --multiplier <value> - write 256 bits * value for each 512 bits written to\n"
-                            "      the Keccak sponge.  Default of 0 means write all the entropy.\n"
+							"    --length <value> - amount of output byte for each 512 bits written to\n"
+                            "      the BLAKE2 state.  Default of 0 means write all the entropy.\n"
                             "    --no-output - do not write random output data\n"
                             "    --pidfile <file> - write process ID to file\n"
                             "    --daemon - run in the background\n"
@@ -125,20 +125,20 @@ int main(int argc, char **argv)
         }
     }
 
-    if (multiplierAssigned == false) {
-        if (getenv("INFNOISE_MULTIPLIER") != NULL) {
-            int tmpOutputMult = atoi(getenv("INFNOISE_MULTIPLIER"));
-            if (tmpOutputMult < 0) {
-                fputs("Multiplier must be >= 0\n", stderr);
+    if (lengthAssigned == false) {
+        if (getenv("INFNOISE_LENGTH") != NULL) {
+            int tmpOutputLength = atoi(getenv("INFNOISE_LENGTH"));
+            if (tmpOutputLength < 0) {
+                fputs("Length must be >= 0\n", stderr);
                 return 1;
             }
-            multiplierAssigned = true;
-            opts.outputMultiplier = tmpOutputMult;
+            lengthAssigned = true;
+            opts.outputLength = tmpOutputLength;
         }
     }
 
-    if(!multiplierAssigned && opts.devRandom) {
-        opts.outputMultiplier = 2u; // Don't throw away entropy when writing to /dev/random unless told to do so
+    if(!lengthAssigned && opts.devRandom) {
+        opts.outputlength = 64u; // Don't throw away entropy when writing to /dev/random unless told to do so
     }
 
     if (opts.version) {
@@ -167,8 +167,8 @@ int main(int argc, char **argv)
     // Optionally run in the background and optionally write a PID-file
     startDaemon(&opts);
 
-    // initialize USB device, health check and Keccak state (see libinfnoise)
-    if (!initInfnoise(&ftdic, opts.serial, &message, !opts.raw, opts.debug)) {
+    // initialize USB device, health check and BLAKE2 state
+    if (!initInfnoise(&ftdic, opts.serial, &message, !opts.raw, opts.debug, opts.outputLength)) {
         fputs(message, stderr);
         return 1; // ERROR
     }
@@ -177,7 +177,7 @@ int main(int argc, char **argv)
     uint64_t totalBytesWritten = 0u;
     while(true) {
         uint64_t prevTotalBytesWritten = totalBytesWritten;
-        totalBytesWritten += readData_private(&ftdic, NULL, &message, &errorFlag, opts.noOutput, opts.raw, opts.outputMultiplier, opts.devRandom); // calling libinfnoise's private readData method
+        totalBytesWritten += readData_private(&ftdic, NULL, &message, &errorFlag, opts.noOutput, opts.raw, opts.outputLength, opts.devRandom); // calling libinfnoise's private readData method
 
         if (errorFlag) {
             fprintf(stderr, "Error: %s\n", message);
