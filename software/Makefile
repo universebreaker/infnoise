@@ -24,6 +24,9 @@ infnoise: libinfnoise.a infnoise.o daemon.o
 %.o: %.c infnoise.h libinfnoise.h
 	$(CC) -c -o $@ $< $(CFLAGS)
 
+blake2xb-ref.o: blake2x_ref/blake2xb-ref.c blake2x_ref/blake2b-ref.c blake2x_ref/blake2.h blake2x_ref/blake2-impl.h
+	$(CC) -c -o $@ $< $(CFLAGS)
+
 KeccakF-1600-reference.o: Keccak/KeccakF-1600-reference.c Keccak/KeccakF-1600-interface.h Keccak/brg_endian.h
 	$(CC) -c -o $@ $< $(CFLAGS)
 
@@ -31,13 +34,13 @@ KeccakF-1600-reference.o: Keccak/KeccakF-1600-reference.c Keccak/KeccakF-1600-in
 libinfnoise.o: libinfnoise.c libinfnoise.h libinfnoise_private.h healthcheck.c
 	$(CC) $(CFLAGS) -c libinfnoise.c
 
-libinfnoise.a: libinfnoise.o healthcheck.o KeccakF-1600-reference.o writeentropy.o
-	ar rcs libinfnoise.a libinfnoise.o healthcheck.o KeccakF-1600-reference.o writeentropy.o
+libinfnoise.a: libinfnoise.o healthcheck.o blake2xb-ref.o writeentropy.o
+	ar rcs libinfnoise.a libinfnoise.o healthcheck.o blake2xb-ref.o writeentropy.o
 	ranlib libinfnoise.a
 
 # shared lib
-libinfnoise.so: libinfnoise.o healthcheck.o KeccakF-1600-reference.o writeentropy.o
-	$(CC) $(CFLAGS) -fvisibility=hidden -o libinfnoise.so libinfnoise.o healthcheck.o KeccakF-1600-reference.o writeentropy.o -Wl,--version-script=libinfnoise.version $(FTDI) -lm -shared 
+libinfnoise.so: libinfnoise.o healthcheck.o blake2xb-ref.o writeentropy.o
+	$(CC) $(CFLAGS) -fvisibility=hidden -o libinfnoise.so libinfnoise.o healthcheck.o blake2xb-ref.o writeentropy.o -Wl,--version-script=libinfnoise.version $(FTDI) -lm -shared
 
 libs: libinfnoise.a
 
