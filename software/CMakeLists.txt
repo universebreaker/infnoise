@@ -1,4 +1,6 @@
-project(InfNoise)
+cmake_minimum_required(VERSION 3.5)
+
+project(infnoise VERSION 0.1)
 
 # Get the Github release version
 execute_process(
@@ -7,6 +9,7 @@ execute_process(
   OUTPUT_VARIABLE GIT_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+
 # Get the latest abbreviated commit hash of the working branch
 execute_process(
   COMMAND git rev-parse --verify HEAD
@@ -17,15 +20,15 @@ execute_process(
 
 # Get Commit timestamp
 execute_process(
-  COMMAND git --no-pager show --date=iso-strict --format="%ad" --name-only
+  COMMAND git --no-pager show --date=iso-strict --format="%ad" --name-only | head -n1
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE GIT_DATE
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-add_definitions(-DGIT_VERSION=${GIT_VERSION})
-add_definitions(-DGIT_COMMIT=${GIT_COMMIT})
-add_definitions(-DGIT_DATE=${GIT_DATE})
+add_definitions(-DGIT_VERSION=\"${GIT_VERSION}\")
+add_definitions(-DGIT_COMMIT=\"${GIT_COMMIT}\")
+add_definitions(-DGIT_DATE=\"${GIT_DATE}\")
 
 add_subdirectory(Keccak)
 add_subdirectory(libinfnoise)
