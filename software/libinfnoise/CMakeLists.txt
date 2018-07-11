@@ -1,6 +1,7 @@
 project(libinfnoise VERSION 0.1)
 
 include_directories(${CMAKE_SOURCE_DIR}/Keccak)
+find_package(ftdi)
 
 set(libSrcs libinfnoise.c libinfnoise.h libinfnoise_private.h healthcheck.c)
 
