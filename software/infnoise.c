@@ -138,7 +138,7 @@ int main(int argc, char **argv)
     }
 
     if(!lengthAssigned && opts.devRandom) {
-        opts.outputlength = 64u; // Don't throw away entropy when writing to /dev/random unless told to do so
+        opts.outputLength = 64u; // Don't throw away entropy when writing to /dev/random unless told to do so
     }
 
     if (opts.version) {

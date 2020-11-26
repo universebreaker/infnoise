@@ -129,69 +129,6 @@ bool isSuperUser(void) {
         return (geteuid() == 0);
 }
 
-// Whiten the output, if requested, with a blake2xb state. Output bytes only if
-// the health checker says it's OK.  Use outputLength to generate a lot more
-// cryptographically secure pseudo-random data than the INM generates.  If
-// outputMultiplier is 0, we output only as many bits as we measure in entropy.
-// This allows a user to generate hundreds of MiB per second if needed, for use
-// as cryptographic keys.
-uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t entropy,
-        bool raw, bool writeDevRandom, uint32_t outputLength, bool noOutput,
-        char **message, bool *errorFlag) {
-    //Use the lower of the measured entropy and the provable lower bound on
-    //average entropy.
-    if(entropy > inmExpectedEntropyPerBit*BUFLEN/INM_ACCURACY) {
-        entropy = inmExpectedEntropyPerBit*BUFLEN/INM_ACCURACY;
-    }
-    if(raw) {
-        // In raw mode, we just output raw data from the INM.
-        if (!noOutput) {
-            if (!outputBytes(bytes, BUFLEN/8u, entropy, writeDevRandom, message)) {
-		*errorFlag = true;
-                return 0; // write failed
-            }
-        } else {
-	    if (result != NULL) {
-                memcpy(result, bytes, BUFLEN/8u * sizeof(uint8_t));
-            }
-	}
-        return BUFLEN/8u;
-    }
-
-    // reseed before reaching max. output
-    blake2xb_update(b2xb, bytes, BUFLEN/8u);
-    uint8_t dataOut[16u*8u];
-    if(outputLength == 0u) {
-        // Output all the bytes of entropy we have
-        blake2xb_final(b2xb, dataOut, entropy/8u);
-	if (!noOutput) {
-	    if (!outputBytes(dataOut, entropy/8u, entropy & 0x7u, writeDevRandom, message)) {
-                *errorFlag = true;
-                return 0;
-            }
-	} else {
-	    if (result != NULL) {
-                memcpy(result, dataOut, entropy/8u * sizeof(uint8_t));
-            }
-	}
-        return entropy/8u;
-    }
-
-    // Output [outputLength] bytes.
-    uint32_t bytesWritten = 0u;
-    blake2xb_inm_final(b2xb, result, dataOut, outputLength, entropy, writeDevRandom, &bytesWritten, noOutput, message, errorFlag);
-    if (*errorFlag == true) {
-        return 0;
-    }
-
-    if(bytesWritten != outputLength) {
-        *message = "Internal error outputing bytes";
-	*errorFlag = true;
-        return 0;
-    }
-    return bytesWritten;
-}
-
 //customized final function to get partial output without changing blake2's underlying maths
 int blake2xb_inm_final( blake2xb_state *S, uint8_t *result, void *out, size_t outlen, uint32_t entropy,
     bool writeDevRandom, uint32_t *bytesWritten, bool noOutput, char **message, bool *errorFlag) {
@@ -244,22 +181,22 @@ int blake2xb_inm_final( blake2xb_state *S, uint8_t *result, void *out, size_t ou
     }
     uint32_t entropyThisTime = entropy;
     if (entropyThisTime > 8u*block_size) {
-        entropyThisTime = 8u*block_size
+        entropyThisTime = 8u*block_size;
     }
     if (!noOutput) {
-        if (!outputBytes(dataOut, block_size, entropyThisTime, writeDevRandom, message)) {
+        if (!outputBytes(out, block_size, entropyThisTime, writeDevRandom, message)) {
             *errorFlag = true;
             return 0;
         }
     } else {
         if (result != NULL) {
             for (uint32_t j = 0; j < block_size; j++) {
-                result[*bytesWritten + j] = dataOut[j];
+                result[*bytesWritten + j] = ((uint8_t *)out)[j];
             }
         }
     }
-    *bytesWritten += block_size
-    entropy -= entropyThisTime
+    *bytesWritten += block_size;
+    entropy -= entropyThisTime;
     //modification ends
     outlen -= block_size;
   }
@@ -268,6 +205,69 @@ int blake2xb_inm_final( blake2xb_state *S, uint8_t *result, void *out, size_t ou
   secure_zero_memory(C, sizeof(C));
   /* Put blake2xb in an invalid state? cf. blake2s_is_lastblock */
   return 0;
+}
+
+// Whiten the output, if requested, with a blake2xb state. Output bytes only if
+// the health checker says it's OK.  Use outputLength to generate a lot more
+// cryptographically secure pseudo-random data than the INM generates.  If
+// outputMultiplier is 0, we output only as many bits as we measure in entropy.
+// This allows a user to generate hundreds of MiB per second if needed, for use
+// as cryptographic keys.
+uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t entropy,
+        bool raw, bool writeDevRandom, uint32_t outputLength, bool noOutput,
+        char **message, bool *errorFlag) {
+    //Use the lower of the measured entropy and the provable lower bound on
+    //average entropy.
+    if(entropy > inmExpectedEntropyPerBit*BUFLEN/INM_ACCURACY) {
+        entropy = inmExpectedEntropyPerBit*BUFLEN/INM_ACCURACY;
+    }
+    if(raw) {
+        // In raw mode, we just output raw data from the INM.
+        if (!noOutput) {
+            if (!outputBytes(bytes, BUFLEN/8u, entropy, writeDevRandom, message)) {
+		*errorFlag = true;
+                return 0; // write failed
+            }
+        } else {
+	    if (result != NULL) {
+                memcpy(result, bytes, BUFLEN/8u * sizeof(uint8_t));
+            }
+	}
+        return BUFLEN/8u;
+    }
+
+    // reseed before reaching max. output
+    blake2xb_update(b2xb, bytes, BUFLEN/8u);
+    uint8_t dataOut[16u*8u];
+    if(outputLength == 0u) {
+        // Output all the bytes of entropy we have
+        blake2xb_final(b2xb, dataOut, entropy/8u);
+    	if (!noOutput) {
+    	    if (!outputBytes(dataOut, entropy/8u, entropy & 0x7u, writeDevRandom, message)) {
+                    *errorFlag = true;
+                    return 0;
+                }
+    	} else {
+    	    if (result != NULL) {
+                    memcpy(result, dataOut, entropy/8u * sizeof(uint8_t));
+                }
+    	}
+        return entropy/8u;
+    }else{
+        // Output [outputLength] bytes.
+        uint32_t bytesWritten = 0u;
+        blake2xb_inm_final(b2xb, result, dataOut, outputLength, entropy, writeDevRandom, &bytesWritten, noOutput, message, errorFlag);
+        if (*errorFlag == true) {
+            return 0;
+        }
+
+        if(bytesWritten != outputLength) {
+            *message = "Internal error outputing bytes";
+    	*errorFlag = true;
+            return 0;
+        }
+        return bytesWritten;
+    }
 }
 
 // Return a list of all infinite noise multipliers found.
