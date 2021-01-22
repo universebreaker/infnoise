@@ -16,15 +16,15 @@
 #include <sys/types.h>
 #include <ftdi.h>
 #include "libinfnoise_private.h"
-#include "KeccakF-1600-interface.h"
+#include "blake3.h"
 
 #if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__) || defined(__FreeBSD__)
 #include <fcntl.h>
 #endif
 
-uint8_t keccakState[KeccakPermutationSizeInBytes];
+blake3_hasher hasher;
 
-bool initInfnoise(struct infnoise_context *context, char *serial, bool keccak, bool debug) {
+bool initInfnoise(struct infnoise_context *context, char *serial, bool blake3, bool debug) {
     context->message="";
     context->entropyThisTime=0;
     context->errorFlag=false;
@@ -47,10 +47,9 @@ bool initInfnoise(struct infnoise_context *context, char *serial, bool keccak, b
         }
     }
 
-    // initialize keccak
-    if (keccak) {
-        KeccakInitialize();
-        KeccakInitializeState(keccakState);
+    // initialize blake3
+    if (blake3) {
+        blake3_hasher_init(&hasher);
     }
 
     // let healthcheck collect some data
@@ -120,7 +119,7 @@ uint32_t extractBytes(uint8_t *bytes, uint32_t length, uint8_t *inBuf, const cha
     return inmGetEntropyLevel();
 }
 
-// Whiten the output, if requested, with a Keccak sponge. Output bytes only if the health
+// Whiten the output, if requested, with a blake3 state. Output bytes only if the health
 // checker says it's OK.  Using outputMultiplier > 1 is a nice way to generate a lot more
 // cryptographically secure pseudo-random data than the INM generates.  If
 // outputMultiplier is 0, we output only as many bits as we measure in entropy.
@@ -147,8 +146,7 @@ uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t *entropy,
     // him to predict any further output, when outputMultiplier > 1, until the next call
     // to processBytes.  All 512 bits are absorbed before squeezing data out to ensure that
     // we instantly recover (reseed) from a state compromise, which is when an attacker
-    // gets a snapshot of the keccak state.  BUFLEN must be a multiple of 64, since
-    // Keccak-1600 uses 64-bit "lanes".
+    // gets a snapshot of the blake3 state.
     uint8_t resultSize;
     if (outputMultiplier <= 2) {
         resultSize = 64u;
@@ -157,11 +155,11 @@ uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t *entropy,
     }
 
     uint8_t dataOut[resultSize];
-    KeccakAbsorb(keccakState, bytes, BUFLEN / 64u);
+    blake3_hasher_update(&hasher, bytes, BUFLEN / 8u);
 
     if (outputMultiplier == 0u) {
         // Output all the bytes of entropy we have
-        KeccakExtract(keccakState, dataOut, (*entropy + 63u) / 64u);
+        blake3_hasher_finalize(&hasher, dataOut, (*entropy + 63u) / 8u);
         if (result != NULL) {
             memcpy(result, dataOut, *entropy / 8u * sizeof(uint8_t));
         }
@@ -180,8 +178,7 @@ uint32_t processBytes(uint8_t *bytes, uint8_t *result, uint32_t *entropy,
             bytesToWrite = *bytesGiven;
         }
 
-        KeccakExtract(keccakState, result, bytesToWrite / 8u);
-        KeccakPermutation(keccakState);
+        blake3_hasher_finalize_seek(&hasher, *bytesWritten, result, bytesToWrite);
         *bytesWritten = bytesToWrite;
         *bytesGiven -= bytesToWrite;
     }
@@ -363,8 +360,7 @@ uint32_t readData(struct infnoise_context *context, uint8_t *result, bool raw, u
             bytesToWrite = context->bytesGiven;
         }
 
-        KeccakExtract(keccakState, result, bytesToWrite / 8u);
-        KeccakPermutation(keccakState);
+        blake3_hasher_finalize_seek(&hasher, context->bytesWritten, result, bytesToWrite);
 
         context->bytesWritten += bytesToWrite;
         context->bytesGiven -= bytesToWrite;

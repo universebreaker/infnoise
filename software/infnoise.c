@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
               "stdout\n"
               "    -r, --raw - do not whiten the output\n"
               "    -m, --multiplier <value> - write 256 bits * value for each 512 bits written to\n"
-              "      the Keccak sponge.  Default of 0 means write all the entropy.\n"
+              "      the blake3 state.  Default of 0 means write all the entropy.\n"
               "    -n, --no-output - do not write random output data\n"
               "    -p, --pidfile <file> - write process ID to file\n"
               "    -d, --daemon - run in the background\n"
@@ -263,7 +263,7 @@ int main(int argc, char **argv) {
     // Optionally run in the background and optionally write a PID-file
     startDaemon(&opts);
 
-    // initialize USB device, health check and Keccak state (see libinfnoise)
+    // initialize USB device, health check and blake3 state (see libinfnoise)
     if (!initInfnoise(&context, opts.serial, !opts.raw, opts.debug)) {
         fprintf(stderr, "Error: %s\n", context.message);
         return 1; // ERROR

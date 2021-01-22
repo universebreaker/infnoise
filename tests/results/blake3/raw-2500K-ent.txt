@@ -1,0 +1,11 @@
+Entropy = 7.259075 bits per byte.
+
+Optimum compression would reduce the size
+of this 2500000 byte file by 9 percent.
+
+Chi square distribution for 2500000 samples is 1874833.84, and randomly
+would exceed this value less than 0.01 percent of the times.
+
+Arithmetic mean value of data bytes is 128.9904 (127.5 = random).
+Monte Carlo value for Pi is 3.406901451 (error 8.45 percent).
+Serial correlation coefficient is -0.005527 (totally uncorrelated = 0.0).

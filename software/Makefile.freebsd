@@ -10,40 +10,51 @@ FTDILOCI = /usr/local/include/libftdi1
 FTDILOCL = /usr/local/lib
 FTDI=   -lftdi1
 
-CFLAGS = -Wall -Wextra -Werror -std=c99 -O3 -fPIC -I Keccak -I $(FTDILOCI) \
+CFLAGS = -Wall -Wextra -Werror -std=c11 -fstack-protector-strong -O3 -fPIC -I blake3/c -I $(FTDILOCI) \
+ -D_FORTIFY_SOURCE=2 \
  -DGIT_VERSION=\"$(GIT_VERSION)\"\
  -DGIT_COMMIT=\"$(GIT_COMMIT)\"\
  -DGIT_DATE=\"$(GIT_DATE)\"\
+
+LDFLAGS=-Wl,-z,relro,-z,now
 
 RM=rm
 
 all: libinfnoise.a libinfnoise.so infnoise
 
 infnoise: libinfnoise.a infnoise.o daemon.o
-	$(CC) $(CFLAGS) -o infnoise infnoise.o daemon.o libinfnoise.a $(FTDI) -lm -L. -L $(FTDILOCL)
+	$(CC) $(CFLAGS) -o infnoise infnoise.o daemon.o libinfnoise.a $(FTDI) -lm -L. -L $(FTDILOCL) $(LDFLAGS)
 
 %.o: %.c infnoise.h libinfnoise.h
-	$(CC) -c -o $@ $< $(CFLAGS)
+	$(CC) -c -o $@ $< $(CFLAGS) $(LDFLAGS)
 
-KeccakF-1600-reference.o: Keccak/KeccakF-1600-reference.c Keccak/KeccakF-1600-interface.h Keccak/brg_endian.h
-	$(CC) -c -o $@ $< $(CFLAGS)
+blake3/c/blake3_%_unix.o: blake3/c/blake3_%_unix.S
+	$(CC) -c -o $@ $< $(CFLAGS) $(LDFLAGS)
+
+blake3/c/%.o: blake3/c/%.c
+	$(CC) -c -o $@ $< $(CFLAGS) $(LDFLAGS)
+
+Blake3.o: blake3/c/blake3.o blake3/c/blake3_dispatch.o blake3/c/blake3_portable.o \
+	blake3/c/blake3_sse2_x86-64_unix.o blake3/c/blake3_sse41_x86-64_unix.o blake3/c/blake3_avx2_x86-64_unix.o \
+	blake3/c/blake3_avx512_x86-64_unix.o
+	ld -relocatable $^ -o $@
 
 # static lib compiled into infnoise binary
 libinfnoise.o: libinfnoise.c libinfnoise.h libinfnoise_private.h healthcheck.c
-	$(CC) $(CFLAGS) -c libinfnoise.c
+	$(CC) $(CFLAGS) -c libinfnoise.c $(LDFLAGS)
 
-libinfnoise.a: libinfnoise.o healthcheck.o KeccakF-1600-reference.o
-	ar rcs libinfnoise.a libinfnoise.o healthcheck.o KeccakF-1600-reference.o
+libinfnoise.a: libinfnoise.o healthcheck.o Blake3.o
+	ar rcs libinfnoise.a libinfnoise.o healthcheck.o Blake3.o
 	ranlib libinfnoise.a
 
 # shared lib
-libinfnoise.so: libinfnoise.o healthcheck.o KeccakF-1600-reference.o
-	$(CC) $(CFLAGS) -fvisibility=hidden -o libinfnoise.so libinfnoise.o healthcheck.o KeccakF-1600-reference.o  -L $(FTDILOCL) -Wl $(FTDI) -lm -shared 
+libinfnoise.so: libinfnoise.o healthcheck.o Blake3.o
+	$(CC) $(CFLAGS) -o libinfnoise.so libinfnoise.o healthcheck.o Blake3.o  -L $(FTDILOCL) -Wl $(FTDI) -lm -shared $(LDFLAGS)
 
 libs: libinfnoise.a
 
 clean:
-	$(RM) -f infnoise *.o *.a *.gch *.so libinfnoise-example
+	$(RM) -f infnoise *.o *.a *.gch *.so libinfnoise-example blake3/c/*.o
 
 install-lib: libinfnoise.so
 	install -d $(PREFIX)/include

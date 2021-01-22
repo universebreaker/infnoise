@@ -12,7 +12,7 @@
 #include <time.h>
 
 // The FT240X has a 512 byte buffer.  Must be multiple of 64
-// We also write this in one go to the Keccak sponge, which is at most 1600 bits
+// We also write this in one go to the blake3 state
 #define BUFLEN 512u
 
 #ifdef __cplusplus
@@ -25,7 +25,6 @@ struct infnoise_context {
     uint32_t entropyThisTime;
     const char *message;
     bool errorFlag;
-    //uint8_t keccakState[KeccakPermutationSizeInBytes];
 
     // used in multiplier mode to keep track of bytes to be put out
     uint32_t bytesGiven;
@@ -56,11 +55,11 @@ infnoise_devlist_node_t* listUSBDevices(const char **message);
  * parameters:
  *  - context: pointer to infnoise_context struct
  *  - serial: optional serial number of the device (NULL)
- *  - keccak: initialize Keccak sponge (required to use readData with raw=false)
+ *  - blake3: initialize blake3 state (required to use readData with raw=false)
  *  - debug: debug flag
  * returns: boolean success indicator (0=success)
 */
-bool initInfnoise(struct infnoise_context *context, char *serial, bool keccak, bool debug);
+bool initInfnoise(struct infnoise_context *context, char *serial, bool blake3, bool debug);
 
 
 /*
@@ -73,7 +72,7 @@ void deinitInfnoise(struct infnoise_context *context);
 
 /*
  * Reads some bytes from the TRNG and stores them in the "result" byte array.
- * The array has to be of sufficient size. Please refer to the example programs. 
+ * The array has to be of sufficient size. Please refer to the example programs.
  * (64 byte for normal operation or 128byte for multiplier mode)
  *
  * After every read operation, the infnoise_context's errorFlag must be checked,
